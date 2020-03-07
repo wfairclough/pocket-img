@@ -1,11 +1,11 @@
 {
-  "name": "pocket-jpg",
+  "name": "pocket-img",
   "version": "1.0.0",
-  "description": "Make jpgs smaller",
+  "description": "Make images smaller",
   "main": "dist/index.js",
   "scripts": {
-    "dockerize": "docker build -t pocket-jpeg:latest .",
-    "docker:run": "docker run -it -p 3000:3000 -e BASE_URL=https://7e9a71d6.ngrok.io pocket-jpeg:latest",
+    "dockerize": "docker build -t pocket-img:latest .",
+    "docker:run": "./scripts/docker_run.sh",
     "build": "tsc",
     "build:watch": "tsc --watch",
     "start": "node dist/index.js",
@@ -14,6 +14,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@google-cloud/storage": "^4.5.0",
     "body-parser": "^1.19.0",
     "express": "^4.17.1",
     "imagemin": "^7.0.1",
@@ -21,6 +22,7 @@
     "jimp": "^0.9.5",
     "morgan": "^1.9.1",
     "multer": "^1.4.2",
+    "nanoid": "^2.1.11",
     "superagent": "^5.2.2"
   },
   "devDependencies": {
@@ -30,6 +32,7 @@
     "@types/imagemin-jpegtran": "^5.0.0",
     "@types/morgan": "^1.9.0",
     "@types/multer": "^1.4.2",
+    "@types/nanoid": "^2.1.0",
     "@types/superagent": "^4.1.7",
     "typescript": "^3.8.3"
   }

@@ -1,11 +1,74 @@
+import { Storage } from '@google-cloud/storage';
 import bodyParser from 'body-parser';
 import express from 'express';
 import Jimp from 'jimp';
 import morgan from 'morgan';
-import { basename, join } from 'path';
-import { resolve } from 'url';
+import nanoid from 'nanoid';
+import { extname } from 'path';
 
-const BASE_URL = process.env.BASE_URL || (() => { throw new Error('Must set BASE_URL env variable') })()
+function envOrElse(name: string, defaultValue: string): string {
+  const value = process.env[name]
+  if (!value) {
+    return defaultValue
+  }
+  return value;
+}
+
+function envOrThrow(name: string): string {
+  const value = envOrElse(name, '')
+  if (!value) {
+    throw new Error(`Must set env variable ${name}`)
+  }
+  return value
+}
+
+const FIFTEEN_MINS = 15 * 60 * 1000;
+const PROJECT_ID = envOrThrow('GCP_PROJECT_ID')
+const PORT = parseInt(envOrElse('PORT', '3000'), 10)
+const GCP_BUCKET = envOrThrow('GCP_BUCKET')
+const GCP_BUCKET_REGION = envOrThrow('GCP_BUCKET_REGION')
+const GCP_CREDENTIALS_B64 = envOrElse('GCP_CREDENTIALS_B64', '')
+const GCP_CREDENTIALS_JSON = GCP_CREDENTIALS_B64 ? Buffer.from(GCP_CREDENTIALS_B64.trim(), 'base64').toString() : undefined
+const GCP_CREDENTIALS = GCP_CREDENTIALS_JSON ? JSON.parse(GCP_CREDENTIALS_JSON) : undefined
+
+const storage = new Storage({
+  projectId: PROJECT_ID,
+  credentials: GCP_CREDENTIALS,
+});
+
+const delay: (ms: number) => Promise<any> = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+function writeDataToStorage(filename: string, mimeType: string, data: Buffer): Promise<string> {
+  console.log(`Writing ${mimeType} '${filename}' to bucket: ${GCP_BUCKET}`)
+  const bucket = storage.bucket(GCP_BUCKET)
+  const file = bucket.file(filename)
+  const stream = file.createWriteStream({
+    metadata: mimeType ? { contentType: mimeType } : undefined,
+  })
+
+  return new Promise<string>((resolve, reject) => {
+    stream.on('finish', () => {
+      console.log(`File written to storage`)
+      function trySignedFile(retries: number = 1): Promise<string> {
+        if (retries > 7) {
+          return Promise.reject(new Error('Too many attempts to get signed url'));
+        }
+        return file.getSignedUrl({
+          action: 'read',
+          expires: Date.now() + FIFTEEN_MINS,
+        }).catch(err => {
+          console.error(err.message, err)
+          return delay(retries * 500).then(() => trySignedFile(++retries))
+        })
+      };
+      return trySignedFile().then(resolve).catch(reject);
+    })
+
+    stream.on('error', reject)
+
+    stream.end(data)
+  })
+}
 
 const app = express()
 
@@ -21,22 +84,28 @@ app.get('/version', (req: express.Request, res: express.Response) => {
 app.post(
   '/smallify',
   async (req: express.Request, res: express.Response) => {
-    const { mediaURL, quality } = req.body;
-    console.log(`Got Media: ${mediaURL}`);
+    const { mediaURL, quality, mimeType } = {
+      quality: 25,
+      mimeType: 'image/jpeg',
+      ...req.body
+    } as any;
+    console.log(`Got Media: ${mediaURL}`)
 
+    const ext = extname(mediaURL)
+    const filename = nanoid(16) + (ext || '')
     const newImage = await Jimp.read(mediaURL).then(image => image.quality(quality || 25))
 
-    const filename = basename(mediaURL)
-    const filepath = join('public', filename)
+    const imgBuffer = await newImage.getBufferAsync(mimeType)
+    console.log(`Compressed Image`);
+    const url = await writeDataToStorage(filename, mimeType, imgBuffer)
 
-    await newImage.writeAsync(filepath);
-
-    console.log(filepath)
+    console.log(`New Photo Uploaded: ${url}`)
 
     res.json({
-      photoURL: resolve(BASE_URL, filename),
-    });
+      photoURL: url,
+    })
   },
 )
 
-app.listen(3000)
+console.log(`Starting pocket-img on port ${PORT}`)
+app.listen(PORT)
