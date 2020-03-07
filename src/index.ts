@@ -46,6 +46,10 @@ function writeDataToStorage(filename: string, mimeType: string, data: Buffer): P
     metadata: mimeType ? { contentType: mimeType } : undefined,
   })
 
+  const getPublicUrl = () => {
+    return `https://storage.googleapis.com/${GCP_BUCKET}/${filename}`;
+  };
+
   return new Promise<string>((resolve, reject) => {
     stream.on('finish', () => {
       console.log(`File written to storage`)
@@ -53,13 +57,12 @@ function writeDataToStorage(filename: string, mimeType: string, data: Buffer): P
         if (retries > 7) {
           return Promise.reject(new Error('Too many attempts to get signed url'));
         }
-        return file.getSignedUrl({
-          action: 'read',
-          expires: Date.now() + FIFTEEN_MINS,
-        }).catch(err => {
-          console.error(err.message, err)
-          return delay(retries * 500).then(() => trySignedFile(++retries))
-        })
+        return file.makePublic()
+          .then(getPublicUrl)
+          .catch(err => {
+            console.error(err.message, err)
+            return delay(retries * 500).then(() => trySignedFile(++retries))
+          })
       };
       return trySignedFile().then(resolve).catch(reject);
     })
@@ -84,26 +87,34 @@ app.get('/version', (req: express.Request, res: express.Response) => {
 app.post(
   '/smallify',
   async (req: express.Request, res: express.Response) => {
-    const { mediaURL, quality, mimeType } = {
-      quality: 25,
-      mimeType: 'image/jpeg',
-      ...req.body
-    } as any;
-    console.log(`Got Media: ${mediaURL}`)
+    try {
+      const { mediaURL, quality, mimeType } = {
+        quality: 25,
+        mimeType: 'image/jpeg',
+        ...req.body
+      } as any;
+      console.log(`Got Media: ${mediaURL}`)
 
-    const ext = extname(mediaURL)
-    const filename = nanoid(16) + (ext || '')
-    const newImage = await Jimp.read(mediaURL).then(image => image.quality(quality || 25))
+      const ext = extname(mediaURL)
+      const filename = nanoid(16) + (ext || '')
+      const newImage = await Jimp.read(mediaURL).then(image => image.quality(quality || 25))
 
-    const imgBuffer = await newImage.getBufferAsync(mimeType)
-    console.log(`Compressed Image`);
-    const url = await writeDataToStorage(filename, mimeType, imgBuffer)
+      const imgBuffer = await newImage.getBufferAsync(mimeType)
+      console.log(`Compressed Image`);
+      const url = await writeDataToStorage(filename, mimeType, imgBuffer)
 
-    console.log(`New Photo Uploaded: ${url}`)
+      console.log(`New Photo Uploaded: ${url}`)
 
-    res.json({
-      photoURL: url,
-    })
+      res.json({
+        photoURL: url,
+      })
+    } catch (err) {
+      console.error(`pocket-img: Internal Server Error`, err)
+      res.status(500).json({
+        message: err.message,
+        stack: err.stack,
+      })
+    }
   },
 )
 
